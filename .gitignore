@@ -1,3 +1,4 @@
 *.csv
 csvs/
 logs/
+api_key.txt
