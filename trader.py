@@ -47,11 +47,42 @@ def get_hourly_sma(symbol, num_hours):
     return sum([float(i[4]) for i in kline_data])/len(kline_data)
     # 4th item
 
-def get_daily_sma(symbol, num_days):
+def get_hourly_wma(symbol, num_hours):
     kline_data = client.continuous_klines(pair=symbol, 
-        contractType="PERPETUAL", interval="1d", limit=num_days)
+        contractType="PERPETUAL", interval="1h", limit=num_hours)
+    return sum(
+        [float(kline_data[i][4])*(num_hours-i) for i in range(num_hours)]
+        )*2/(num_hours*(num_hours+1))
+
+def get_daily_sma(symbol, num_days, kline_data=None):
+    if kline_data is None:
+        kline_data = client.continuous_klines(pair=symbol, 
+            contractType="PERPETUAL", interval="1d", limit=num_days)
+        
     return sum([float(i[4]) for i in kline_data])/len(kline_data)
 
+def get_daily_wma(symbol, num_days):
+    kline_data = client.continuous_klines(pair=symbol, 
+        contractType="PERPETUAL", interval="1d", limit=num_days)
+    return sum(
+        [float(kline_data[i][4])*(num_days-i) for i in range(num_days)]
+        )*2/(num_days*(num_days+1))
+
+def get_daily_ema(symbol, num_days):
+    kline_data = client.continuous_klines(pair=symbol, 
+        contractType="PERPETUAL", interval="1d", limit=num_days)
+    
+    # randomly decided that I will take 2x num of days
+    # then take 1/4 for SMA
+    # then next 3/4 for EMA.
+    # there's no logic behind this.
+
+    weighting = 2/(num_days+1)
+    cur_ema = get_daily_sma(symbol, num_days//4, 
+                            kline_data[num_days-num_days//4:])
+    for i in range(num_days-num_days//4, 0, -1):
+        cur_ema = (float(kline_data[i][4])-cur_ema)*weighting+cur_ema
+    return cur_ema
 
 SYMBOLS = ["BTCUSDT", "BCHUSDT", "ETHUSDT", "ETCUSDT", "LTCUSDT", "XRPUSDT", 
     "EOSUSDT"]
@@ -80,7 +111,7 @@ if symbols_data[min_sym]["percentage"] > 0 or symbols_data[max_sym]["percentage"
     #exit()
     pass
 
-print(symbols_data)
+#print(symbols_data)
 CAP = 100.0
 
 order_data = [
@@ -130,4 +161,9 @@ def close_all_positions():
         #print(order_list, "\n")
         print(client.new_batch_order(order_list))
 
-close_all_positions()
+#close_all_positions()
+print(get_daily_ema("BTCUSDT", 100))
+
+print(get_daily_sma("BTCUSDT", 9))
+
+print(get_daily_wma("BTCUSDT", 9))
