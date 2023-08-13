@@ -2,6 +2,7 @@ import requests
 from binance.um_futures import UMFutures
 import os
 import shutil
+import random
 
 class trader:
 
@@ -25,14 +26,22 @@ class trader:
         print("Successfully connected to the endpoint.")
 
         self.symbol_data = {}
+        
         self.get_exchange_info()
 
-    def get_exchange_info(self):
-        # get exchange info, reformat it so that it's easy for us to work with.
+    def get_symbol_data(self):
+        return self.symbol_data
 
+    def get_exchange_info(self, perpetualOnly=True):
+        # get exchange info, reformat it so that it's easy for us to work with.
+        
         ex_info = self.client.exchange_info()
 
         for sym in ex_info["symbols"]:
+
+            # check if perpetual. we only want perpetual contracts
+            if sym["contractType"] != "PERPETUAL":
+                continue
 
             self.symbol_data[sym["symbol"]] = sym
             self.symbol_data[sym["symbol"]]["filters"] = \
@@ -40,17 +49,36 @@ class trader:
             
     def qty_min(self, sym):
         # get min purchase qty
-        return self.symbol_data[sym]["filters"]["LOT_SIZE"]["minQty"]
+        return float(self.symbol_data[sym]["filters"]["LOT_SIZE"]["minQty"])
     
     def price_min(self, sym):
         # min token price
-        return self.symbol_data[sym]["filters"]["PRICE_FILTER"]["minPrice"]
+        return float(self.symbol_data[sym]["filters"]["PRICE_FILTER"]["minPrice"])
     
-    def qty_precision(self, sym):
+    def get_precision(self, sym, mode="P"):
         # get lowest qty precision, in decimals
-        i = self.symbol_data[sym]["filters"]["LOT_SIZE"]["stepSize"]
-        return len(str(i).split(".")[1])    
+        if type(mode) is not str:
+            raise TypeError("mode should be a string, either Q for Quantity \
+                            or P for Price.")
+        mode = mode.lower()
+        
+        if mode == "p":
+            i = self.symbol_data[sym]["filters"]["PRICE_FILTER"]["tickSize"]
+        elif mode == "q":            
+            i = self.symbol_data[sym]["filters"]["LOT_SIZE"]["stepSize"]
+        else:
+            raise ValueError("mode should either be P or Q for \
+                             Quantity or Price")
+        
+        if i.find(".") != -1:
+            return i[::-1].strip("0").find(".")
+        else:
+            return -1*len(i)+1
+
     
+    def get_markprice(self, sym):
+        return float(self.client.mark_price(sym)["markPrice"])
+
     def max_market_symbol(self):
         # want to get the most expensive minimum purchase for a symbol.
         # this will be useful to determine how large our orders must be.
@@ -79,22 +107,7 @@ class trader:
         return max_token_name, max_token_val
 
     def get_hourly_sma(self, symbol, num_hours):
-        '''
-        [
-            1607444700000,          // Open time
-            "18879.99",             // Open
-            "18900.00",             // High
-            "18878.98",             // Low
-            "18896.13",             // Close (or latest price)
-            "492.363",              // Volume
-            1607444759999,          // Close time
-            "9302145.66080",        // Quote asset volume
-            1874,                   // Number of trades
-            "385.983",              // Taker buy volume
-            "7292402.33267",        // Taker buy quote asset volume
-            "0"                     // Ignore.
-        ]
-        '''
+
         kline_data = self.client.continuous_klines(pair=symbol, 
             contractType="PERPETUAL", interval="1h", limit=num_hours)
         return sum([float(i[4]) for i in kline_data])/len(kline_data)
@@ -145,10 +158,53 @@ class trader:
     def get_account_positions(self):
         return [i for i in self.client.account()["positions"] if 
             float(i["positionAmt"]) != 0]
+    
+    def purchase_random(self, num):
+        # Purchase a random selection of symbols. Spend the minimum amount
+        # possible on each symbol.
+        if num > len(self.get_symbol_data()):
+            raise ValueError(f"Number of symbols to purchase must be \
+                less than or equal to {len(self.get_symbol_data())}")
+        
+        order_book = []
 
+        # note: min purchase value should be greater than $5 USDT if made
+        # through the api. requirement, code "-4164"
+        for i in random.sample(list(self.get_all_symbols()), num):
+            
+            short = random.randint(0,1)
+            mp = round(self.get_markprice(i), self.get_precision(i, mode="p"))
+            qty = 5/mp
 
-SYMBOLS = ["BTCUSDT", "BCHUSDT", "ETHUSDT", "ETCUSDT", "LTCUSDT", "XRPUSDT", 
-    "EOSUSDT"]
+            if self.qty_min(i)*mp > 5:
+                qty = self.qty_min(i)*mp
+
+            qty = round(qty, self.get_precision(i, mode="q"))
+            while (qty * mp < 5):
+                qty = round(qty + 
+                    float(self.symbol_data[i]["filters"]["LOT_SIZE"]["stepSize"]), 
+                    self.get_precision(i, mode="q"))
+
+            order_book.append({
+                "symbol": i,
+                "side": "SELL" if short else "BUY",
+                "positionSide": "SHORT" if short else "LONG",
+                "quantity": str(round(qty, 
+                    self.get_precision(i, mode="q"))),
+                "price": str(round(mp, self.get_precision(i, mode="p"))),
+                "type": "LIMIT",
+                "timeInForce": "GTC"
+            })
+
+        print(order_book)
+        for i in range(0, num, 5):
+            print(self.client.new_batch_order(
+                order_book[i:(i+5 if i+5 < num else num)]))
+        
+        #print(order_list, "\n")
+
+#SYMBOLS = ["BTCUSDT", "BCHUSDT", "ETHUSDT", "ETCUSDT", "LTCUSDT", "XRPUSDT", 
+#    "EOSUSDT"]
 
 '''
 # for all coins, get daily sma and hourly sma.
@@ -245,3 +301,5 @@ with open("api_key.txt", "r") as secret:
 me = trader(API_KEY, API_SECRET)
 
 print(me.max_market_symbol())
+
+me.purchase_random(15)
